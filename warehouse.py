@@ -1,7 +1,9 @@
 import copy
+import random
 
 import torch
 
+import anomaly
 import config
 import reinforcement_learning
 
@@ -38,8 +40,14 @@ class Warehouse:
         return new_warehouse
 
     def process(self, tick, c_decision, r_decision, item_in=-1, order_in=None, current_anomaly=None):
+        is_c_processed = False
+        is_s_processed = False
+
         if order_in is not None:
             self.orders.append(order_in)
+
+        if current_anomaly is not None:
+            current_anomaly = [current_anomaly[0], 0, current_anomaly[1]]
 
         c_move = -1
         if c_decision != config.warehouse_num_r:
@@ -53,7 +61,7 @@ class Warehouse:
             if len(self.r_items[r_decision]) > 0:
                 if self.r_items[r_decision][0] != -1:
                     if len(self.s_items) < config.warehouse_cap_conveyor:
-                        if current_anomaly is None or current_anomaly.way != r_decision:
+                        if current_anomaly is None or current_anomaly[r_decision] != 1:
                             r_move = self.r_items[r_decision].pop(0)
 
         if len(self.s_items) > 0:
@@ -66,6 +74,7 @@ class Warehouse:
                         self.processed_order += 1
                         self.average_time = self.processed_time / self.processed_order
                         self.orders.remove(order)
+                        is_s_processed = True
                         break
 
         if item_in != -1:
@@ -73,9 +82,12 @@ class Warehouse:
 
         if c_move != -1:
             self.r_items[c_decision].append(c_move)
+            is_c_processed = True
 
         if r_move != -1:
             self.s_items.append(r_move)
+
+        return is_c_processed, is_s_processed
 
     def is_ended(self):
         if len(self.c_items) > config.warehouse_cap_conveyor:
@@ -102,21 +114,54 @@ class Warehouse:
                 state.append(-1)
 
         for i in range(config.warehouse_num_r):
-            state.extend(self.r_items[i])
-            if len(self.r_items[i]) < config.warehouse_cap_conveyor:
-                for _ in range(config.warehouse_cap_conveyor - len(self.r_items[i])):
-                    state.append(-1)
-
-        if len(self.orders) < config.warehouse_cap_order:
-            for order in self.orders:
-                state.append(order.item)
-            for _ in range(config.warehouse_cap_order - len(self.orders)):
+            # state.extend(self.r_items[i])
+            # if len(self.r_items[i]) < config.warehouse_cap_conveyor:
+            #     for _ in range(config.warehouse_cap_conveyor - len(self.r_items[i])):
+            #         state.append(-1)
+            if len(self.r_items[i]) == 0:
                 state.append(-1)
-        else:
-            for order in self.orders[:config.warehouse_cap_order]:
-                state.append(order.item)
+            else:
+                state.append(self.r_items[i][0])
+
+        # if len(self.orders) < config.warehouse_cap_order:
+        #     for order in self.orders:
+        #         state.append(order.item)
+        #     for _ in range(config.warehouse_cap_order - len(self.orders)):
+        #         state.append(-1)
+        # else:
+        #     for order in self.orders[:config.warehouse_cap_order]:
+        #         state.append(order.item)
 
         return state
+
+    def available_tactic(self, is_together=False):
+        c_tactic = []
+        r_tactic = []
+        for repo in self.r_items:
+            if len(repo) < config.warehouse_cap_conveyor:
+                c_tactic.append(True)
+            else:
+                c_tactic.append(False)
+
+            if len(repo) != 0:
+                r_tactic.append(True)
+            else:
+                r_tactic.append(False)
+
+        c_tactic.append(True)
+        r_tactic.append(True)
+
+        if is_together:
+            whole = []
+            for i in range(config.rl_output_size):
+                if c_tactic[i // config.warehouse_num_r] and r_tactic[i % config.warehouse_num_r]:
+                    whole.append(True)
+                else:
+                    whole.append(False)
+
+            return whole
+
+        return c_tactic, r_tactic
 
 
 def decision_making_default(warehouse):
@@ -140,30 +185,37 @@ def decision_making_default(warehouse):
     return c_decision, r_tactic
 
 
-def decision_making_rl(warehouse, rl_model, is_anomaly_aware=False, current_anomaly=1):
+def decision_making_rl(warehouse, rl_model, is_anomaly_aware=False, current_anomaly=None):
+    if current_anomaly is None:
+        current_anomaly = [0, 0]
+
     if is_anomaly_aware:
-        state_tensor = torch.FloatTensor([[current_anomaly, *warehouse.model_state()]]).to(config.cuda_device)
+        state_tensor = torch.FloatTensor([[*current_anomaly, *warehouse.model_state()]]).to(config.cuda_device)
     else:
         state_tensor = torch.FloatTensor([warehouse.model_state()]).to(config.cuda_device)
 
-    result_tensor = rl_model.model(state_tensor).data.max(1)[1].view(1, 1)
+    result_tactic = rl_model.select_tactic(state_tensor, warehouse.available_tactic(True))
 
-    c_tactic = int(torch.round(result_tensor / (config.warehouse_num_r + 1)))
-    r_tactic = int(result_tensor % (config.warehouse_num_r + 1))
+    c_tactic = int(torch.round(result_tactic / (config.warehouse_num_r + 1)))
+    r_tactic = int(result_tactic % (config.warehouse_num_r + 1))
 
     return c_tactic, r_tactic
 
 
-def decision_making_rl_rl(warehouse, c_model, r_model, is_anomaly_aware=False, current_anomaly=1):
+def decision_making_rl_rl(warehouse, c_model, r_model, is_anomaly_aware=False, current_anomaly=None):
+    if current_anomaly is None:
+        current_anomaly = [0, 0]
+
     if is_anomaly_aware:
-        c_state_tensor = torch.FloatTensor([[current_anomaly, *warehouse.model_state('c')]]).to(config.cuda_device)
-        r_state_tensor = torch.FloatTensor([[current_anomaly, *warehouse.model_state('r')]]).to(config.cuda_device)
+        c_state_tensor = torch.FloatTensor([[*current_anomaly, *warehouse.model_state('c')]]).to(config.cuda_device)
+        r_state_tensor = torch.FloatTensor([[*current_anomaly, *warehouse.model_state('r')]]).to(config.cuda_device)
     else:
         c_state_tensor = torch.FloatTensor([warehouse.model_state('c')]).to(config.cuda_device)
         r_state_tensor = torch.FloatTensor([warehouse.model_state('r')]).to(config.cuda_device)
 
-    c_result_tensor = c_model.model(c_state_tensor).data.max(1)[1].view(1, 1)
-    r_result_tensor = r_model.model(r_state_tensor).data.max(1)[1].view(1, 1)
+    c_av, r_av = warehouse.available_tactic()
+    c_result_tensor = c_model.select_tactic(c_state_tensor, c_av)
+    r_result_tensor = r_model.select_tactic(r_state_tensor, r_av)
 
     return c_result_tensor, r_result_tensor
 
@@ -177,15 +229,11 @@ def run_warehouse(tick, warehouse, c_decision, r_decision, item_list, order_list
         order_in = None
         item_in = -1
 
-    current_anomaly = None
-    if anomalies is not None:
-        for single_anomaly in anomalies:
-            if single_anomaly.valid(tick):
-                current_anomaly = single_anomaly
+    current_anomaly = anomaly.get_anomaly(tick, anomalies)
 
-    warehouse.process(tick, c_decision, r_decision, item_in, order_in, current_anomaly)
+    c, s = warehouse.process(tick, c_decision, r_decision, item_in, order_in, current_anomaly)
 
-    return warehouse
+    return warehouse, c, s
 
 
 def run(dm_type, item_list, order_list, anomalies=None):
@@ -194,46 +242,44 @@ def run(dm_type, item_list, order_list, anomalies=None):
     c_model = None
     r_model = None
 
-    if dm_type == 'RL':
+    if dm_type == 'RL-ONE':
         rl_model = reinforcement_learning.DQN(config.rl_input_size, config.rl_output_size, path='model/rl.pth').to(
             config.cuda_device)
 
-    elif dm_type == 'A-RL':
+    elif dm_type == 'AD-RL-ONE':
         rl_model = reinforcement_learning.DQN(config.rl_input_size + 1, config.rl_output_size, True,
                                               path='model/a_rl.pth').to(config.cuda_device)
 
-    elif dm_type == 'RL-RL':
-        c_model = reinforcement_learning.DQN(config.rl_input_size, config.warehouse_num_r, path='model/rl_c.pth').to(
-            config.cuda_device)
-        r_model = reinforcement_learning.DQN(config.rl_input_size - 1, config.warehouse_num_r,
+    elif dm_type == 'RL':
+        c_model = reinforcement_learning.DQN(config.warehouse_num_r + 1, config.warehouse_num_r + 1,
+                                             path='model/rl_c.pth').to(config.cuda_device)
+        r_model = reinforcement_learning.DQN(config.warehouse_num_r, config.warehouse_num_r + 1,
                                              path='model/rl_r.pth').to(config.cuda_device)
 
-    elif dm_type == 'A-RL-RL':
-        c_model = reinforcement_learning.DQN(config.rl_input_size + 1, config.warehouse_num_r, True,
+    elif dm_type == 'AD-RL':
+        c_model = reinforcement_learning.DQN(config.warehouse_num_r + 3, config.warehouse_num_r + 1, True,
                                              path='model/a_rl_c.pth').to(config.cuda_device)
-        r_model = reinforcement_learning.DQN(config.rl_input_size, config.warehouse_num_r, True,
+        r_model = reinforcement_learning.DQN(config.warehouse_num_r + 2, config.warehouse_num_r + 1, True,
                                              path='model/a_rl_r.pth').to(config.cuda_device)
 
     for tick in range(config.sim_total_ticks):
-        current_anomaly = 1
-        if dm_type == 'A-RL' or dm_type == 'A-RL-RL':
-            if anomalies is not None:
-                for single_anomaly in anomalies:
-                    if single_anomaly.valid(tick):
-                        current_anomaly = single_anomaly.way
+        current_anomaly = anomaly.get_anomaly(tick, anomalies)
 
-        if dm_type == 'RL':
+        if dm_type == 'RL-ONE':
             c_decision, r_decision = decision_making_rl(warehouse, rl_model)
-        elif dm_type == 'A-RL':
+        elif dm_type == 'AD-RL-ONE':
             c_decision, r_decision = decision_making_rl(warehouse, rl_model, True, current_anomaly)
-        elif dm_type == 'RL-RL':
+        elif dm_type == 'RL':
             c_decision, r_decision = decision_making_rl_rl(warehouse, c_model, r_model)
-        elif dm_type == 'A-RL-RL':
+        elif dm_type == 'AD-RL':
             c_decision, r_decision = decision_making_rl_rl(warehouse, c_model, r_model, True, current_anomaly)
+        elif dm_type == 'Random':
+            c_decision = random.randrange(3)
+            r_decision = random.randrange(3)
         else:
             c_decision, r_decision = decision_making_default(warehouse)
 
-        warehouse = run_warehouse(tick, warehouse, c_decision, r_decision, item_list, order_list, anomalies)
+        warehouse, c, s = run_warehouse(tick, warehouse, c_decision, r_decision, item_list, order_list, anomalies)
 
         # print(tick)
         # print(warehouse)

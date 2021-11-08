@@ -3,7 +3,7 @@ import torch
 # Smart Warehouse configuration
 warehouse_cap_conveyor = 10
 warehouse_cap_order = 25
-warehouse_default_c = [0, 1, 2, 2]
+warehouse_default_c = [0, 1, 2, 1]
 warehouse_num_r = 3
 warehouse_ratio_item = [[6, 1, 1, 2],
                         [3, 3, 1, 3],
@@ -12,19 +12,24 @@ warehouse_ratio_item = [[6, 1, 1, 2],
                         [1, 1, 6, 2],
                         [3, 1, 3, 3]]
 warehouse_ratio_duration = 50
-warehouse_tick_per_in = 2
+warehouse_tick_per_in = 3
 
 # Smart warehouse anomaly configuration
 anomaly_duration = 200
-anomaly_after = 100
-anomaly_mtth = 100
+anomaly_after = 50
+anomaly_mtth = 1000
 
 # Environment Configuration
 
 # Simulation Configuration
 sim_count = 1
-sim_targets = ['A-RL-RL', 'RL-RL', 'A-RL', 'RL', 'Default']
-sim_total_ticks = 1000
+sim_targets = [
+    'AD-RL',
+    'RL',
+    'Random',
+    'Default'
+]
+sim_total_ticks = 3000
 sim_tqdm_on = True
 
 # Pytorch configuration
@@ -44,7 +49,7 @@ rl_memory_size = 10000
 # Calculations, Assertions
 warehouse_num_types = len(warehouse_default_c)
 rl_input_size = warehouse_num_r * warehouse_cap_conveyor + warehouse_cap_order + 1
-rl_output_size = warehouse_num_r * (1 + warehouse_num_r)
+rl_output_size = (1 + warehouse_num_r) ** 2
 assert min(warehouse_default_c) >= 0
 assert max(warehouse_default_c) < warehouse_num_types
 for i in range(len(warehouse_ratio_item)):
