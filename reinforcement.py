@@ -29,7 +29,7 @@ class DQN(nn.Module):
     def __init__(self, anomaly_aware, path=''):
         super(DQN, self).__init__()
         self.anomaly_aware = anomaly_aware
-        self.input_size = 10 if anomaly_aware else 9
+        self.input_size = 11 if anomaly_aware else 10
         self.output_size = 3
         self.hidden_size = 512
 
