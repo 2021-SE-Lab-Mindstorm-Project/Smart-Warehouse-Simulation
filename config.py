@@ -3,15 +3,15 @@ import torch
 cap_conveyor = 5
 cap_wait = 5
 
-reward_order = 100
-reward_trash = 50
+reward_order = 25
+reward_trash = 100
 reward_wait = 1
 
-order_total = 100
+order_total = 20
 order_delay = 0
 
-anomaly_mtbf = 5
-anomaly_duration = 50
+anomaly_mtbf = 2
+anomaly_duration = 10
 
 cuda_device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 

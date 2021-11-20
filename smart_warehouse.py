@@ -146,7 +146,11 @@ class Warehouse:
         return orders
 
     def get_state(self):
-        ans = [self.c[0]]
+        if len(self.c) == 0:
+            ans = [0]
+        else:
+            ans = [self.c[0]]
+
         for i in range(3):
             ans.append(repr_list(self.r[i]))
         ans.append(repr_list(self.s))
