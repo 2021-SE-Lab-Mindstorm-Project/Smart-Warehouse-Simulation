@@ -26,10 +26,9 @@ class Memory(object):
 
 
 class DQN(nn.Module):
-    def __init__(self, anomaly_aware, path=''):
+    def __init__(self, path=''):
         super(DQN, self).__init__()
-        self.anomaly_aware = anomaly_aware
-        self.input_size = 11 if anomaly_aware else 10
+        self.input_size = 10
         self.output_size = 3
         self.hidden_size = 512
 
@@ -62,7 +61,7 @@ class DQN(nn.Module):
 
     def select_train_tactic(self, state, available):
         sample = random.random()
-        eps_threshold = 0.05 + 0.85 * math.exp(-1. * self.steps / 200)
+        eps_threshold = 0.05 + 0.9 * math.exp(-1. * self.steps / 200)
         self.steps += 1
 
         if sample > eps_threshold:
@@ -106,38 +105,54 @@ class DQN(nn.Module):
                          torch.FloatTensor([next_state]).to(config.cuda_device))
         self.optimize_model()
 
+    def train_rl(self, anomaly_value=0):
+        for i in range(150 if anomaly_value == 0 else 50):
+            orders = smart_warehouse.generate_order_list()
+            if anomaly_value != 0:
+                anomalies = [[], [], []]
+                if anomaly_value % 2 != 0:
+                    for j in range(config.order_total * 100):
+                        anomalies[2].append(j)
 
-def train(anomaly_aware):
-    model = DQN(anomaly_aware).to(config.cuda_device)
-    for i in range(150):
-        orders = smart_warehouse.generate_order_list()
-        anomaly = smart_warehouse.generate_anomaly(is_real=True) if anomaly_aware else [[], [], []]
+                if anomaly_value // 2 != 0:
+                    for j in range(config.order_total * 100):
+                        anomalies[1].append(j)
 
-        target = smart_warehouse.Warehouse(orders, anomaly, anomaly_aware)
+                if anomaly_value // 4 != 0:
+                    for j in range(config.order_total * 100):
+                        anomalies[0].append(j)
+            else:
+                anomalies = [[], [], []]
 
-        tick = 0
-        while tick < config.order_total or target.get_order() > 0:
-            decided = False
-            decision = 3
-            old_state = target.get_state()
-            if target.need_decision():
-                decided = True
-                available = target.available()
-                decision = model.select_train_tactic([tick, *old_state], available)
+            target = smart_warehouse.Warehouse(orders, anomalies, False if anomaly_value == 0 else True)
 
-            reward = target.run(tick, decision)
-            tick += 1
+            tick = 0
+            while tick < config.order_total or target.get_order() > 0:
+                decided = False
+                decision = 3
+                old_state = target.get_state()
+                if target.need_decision():
+                    decided = True
+                    available = target.available()
+                    decision = self.select_train_tactic([tick, *old_state], available)
 
-            new_state = target.get_state()
-            if decided:
-                model.push_optimize([tick, *old_state], decision, reward, [tick + 1, *new_state])
+                reward = target.run(tick, decision)
+                tick += 1
 
-        print('episode: %d reward: %d processed: %d' % (i, target.reward, tick))
+                new_state = target.get_state()
+                if decided:
+                    self.push_optimize([tick, *old_state], decision, reward, [tick + 1, *new_state])
 
-    path = 'model/a_rl.pth' if anomaly_aware else 'model/rl.pth'
-    torch.save(model.state_dict(), path)
+            print('episode: %d reward: %d processed: %d' % (i, target.reward, tick))
+
+        path = ('model/a_rl_' + str(anomaly_value) + '.pth') if anomaly_value != 0 else 'model/rl.pth'
+        torch.save(self.state_dict(), path)
 
 
 if __name__ == "__main__":
-    train(False)
-    train(True)
+    rl_model = DQN().to(config.cuda_device)
+    rl_model.train_rl()
+
+    for i in [1, 4, 5]:
+        a_rl_model = DQN(path='model/rl.pth').to(config.cuda_device)
+        a_rl_model.train_rl(i)

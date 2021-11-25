@@ -3,7 +3,7 @@ import math
 import random
 
 import config
-import reinforcement
+import rl
 
 
 def generate_anomaly(is_real=True, name=None):
@@ -14,7 +14,7 @@ def generate_anomaly(is_real=True, name=None):
             count = 1
             tick = 1
             while tick < config.order_total * 100:
-                prob = 1 - math.e ** (-count / config.anomaly_mtbf ** 2)
+                prob = 1 - math.exp(-count / config.anomaly_mtbf)
                 if random.random() < prob:
                     anomaly.append(tick)
                     count = 0
@@ -156,12 +156,13 @@ class Warehouse:
         ans.append(repr_list(self.s))
         ans.extend(self.get_order(False))
 
-        if self.anomaly_aware:
-            anomaly_number = 0
-            for i, anomaly in enumerate(self.current_anomaly):
-                if anomaly != -1:
-                    anomaly_number += (2 ** i)
-            ans.append(anomaly_number)
+        return ans
+
+    def anomaly_state(self):
+        ans = 0
+        for i in range(3):
+            if self.current_anomaly[i] != -1:
+                ans += 2 ** i
 
         return ans
 
@@ -266,27 +267,32 @@ def run(name, dm_type, orders, anomalies):
         with open('log/dm/' + name + '_' + dm_type + '.csv', 'w', newline='') as dm_file:
             dm_writer = csv.writer(dm_file)
 
-            if dm_type == 'ORL':
-                rl_model = reinforcement.DQN(False, path='model/rl.pth').to(config.cuda_device)
-            if dm_type == 'AD-RL':
-                rl_model = reinforcement.DQN(True, path='model/a_rl.pth').to(config.cuda_device)
+            if dm_type == 'ORL' or dm_type == 'AAAA' or dm_type == 'RL':
+                rl_model = rl.DQN(path='model/rl.pth').to(config.cuda_device)
+            if dm_type == 'AAAA':
+                a_rl_models = [None, rl.DQN(path='model/a_rl_1.pth').to(config.cuda_device),
+                               None, None, rl.DQN(path='model/a_rl_4.pth').to(config.cuda_device),
+                               rl.DQN(path='model/a_rl_5.pth').to(config.cuda_device),
+                               None, None]
 
-            warehouse = Warehouse(orders, anomalies, True if dm_type == 'AD-RL' else False)
+            warehouse = Warehouse(orders, anomalies, True if dm_type == 'AD-RL' or dm_type == 'AAAA' else False)
             tick = 0
 
             while tick < config.order_delay + config.order_total or warehouse.get_order() != 0:
                 decided = False
                 decision = 3
-                if dm_type == 'ORL' or dm_type == 'AD-RL':
+                if dm_type == 'ORL' or dm_type == 'AAAA' or dm_type == 'RL':
                     if warehouse.need_decision():
                         decided = True
                         old_state = warehouse.get_state()
-                        decision = decision_making_rl(warehouse, rl_model, tick)
+                        if warehouse.anomaly_state() != 0 and dm_type == 'AAAA':
+                            decision = decision_making_rl(warehouse, a_rl_models[warehouse.anomaly_state()], tick)
+                        else:
+                            decision = decision_making_rl(warehouse, rl_model, tick)
                     else:
                         avail = warehouse.get_available()
                         if len(avail) != 0:
                             decision = avail[0]
-
                 else:
                     candidate = warehouse.get_available()
                     if len(candidate) != 0:
